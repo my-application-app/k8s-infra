@@ -113,10 +113,29 @@ jobs:
     - name: Wait for MySQL to be fully ready
       run: |
         echo "Waiting for MySQL to be fully ready..."
-        kubectl wait --for=condition=Ready pod -l app=mysql -n $NAMESPACE --timeout=600s
+        # Wait with a more reasonable timeout and better error handling
+        kubectl wait --for=condition=Ready pod -l app=mysql -n $NAMESPACE --timeout=300s || echo "MySQL pod not ready yet, checking status..."
+        
+        echo "Current MySQL pod status:"
+        kubectl get pods -l app=mysql -n $NAMESPACE
         
         echo "Testing MySQL connectivity..."
-        kubectl exec -n $NAMESPACE $(kubectl get pods -l app=mysql -n $NAMESPACE -o jsonpath='{.items[0].metadata.name}') -- mysql -u root -proot_password -e "SELECT 1;" || echo "MySQL connection test failed, but continuing..."
+        MYSQL_POD=$(kubectl get pods -l app=mysql -n $NAMESPACE -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+        if [ ! -z "$MYSQL_POD" ]; then
+          # Try multiple times with backoff
+          for i in {1..5}; do
+            echo "MySQL connection attempt $i/5..."
+            if kubectl exec -n $NAMESPACE $MYSQL_POD -- mysql -u root -proot_password -e "SELECT 1;" 2>/dev/null; then
+              echo "✅ MySQL is ready and accepting connections"
+              break
+            else
+              echo "MySQL not ready yet, waiting 30 seconds..."
+              sleep 30
+            fi
+          done
+        else
+          echo "⚠️  Could not find MySQL pod"
+        fi
     
     - name: Deploy application services
       run: |
