@@ -1,7 +1,7 @@
 name: Deploy Bedrock Chat Multi-Repo
 on:
   workflow_run:
-    workflows: ["terraform.yml"]  # Replace with your exact Terraform workflow name
+    workflows: ["Setup Infra and Deploy GitHub Runner"]  # Replace with your exact Terraform workflow name
     types:
       - completed
     branches: [ main, master ]
