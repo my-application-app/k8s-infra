@@ -1,0 +1,73 @@
+name: Setup Infra and Deploy GitHub Runner
+
+on:
+  workflow_dispatch:
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Get short-lived runner token
+        id: get_token
+        run: |
+          TOKEN=$(curl -sX POST \
+            -H "Authorization: Bearer ${{ secrets.ORG_RUNNER_PAT }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/orgs/awsdeployer/actions/runners/registration-token \
+            | jq -r .token)
+          echo "RUNNER_TOKEN=$TOKEN" >> $GITHUB_ENV
+
+      - name: Bootstrap Terraform Backend
+        working-directory: terraform
+        run: bash ./bootstrap.sh
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init
+
+      - name: Terraform Apply
+        working-directory: terraform
+        run: terraform apply -auto-approve
+        env:
+          TF_VAR_runner_token: ${{ env.RUNNER_TOKEN }}
+
+      - name: Get EC2 Public IP
+        working-directory: terraform
+        id: ec2_ip
+        run: |
+          IP=$(terraform output -raw public_ip)
+          echo "EC2_PUBLIC_IP=$IP" >> $GITHUB_ENV
+          echo "Deployed EC2 Public IP: $IP"
+
+      - name: Wait for Runner to be Online
+        run: |
+          echo "Waiting for GitHub runner to come online..."
+          RUNNER_NAME="org_runner"
+          MAX_RETRIES=30
+          SLEEP_SEC=15
+          for i in $(seq 1 $MAX_RETRIES); do
+            STATUS=$(curl -s -H "Authorization: token ${{ secrets.ORG_RUNNER_PAT }}" \
+                     -H "Accept: application/vnd.github+json" \
+                     https://api.github.com/orgs/awsdeployer/actions/runners \
+                     | jq -r ".runners[] | select(.name==\"$RUNNER_NAME\") | .status")
+            if [ "$STATUS" == "online" ]; then
+              echo "Runner is online!"
+              exit 0
+            fi
+            echo "Attempt $i/$MAX_RETRIES: Runner not online yet. Waiting $SLEEP_SEC seconds..."
+            sleep $SLEEP_SEC
+          done
+          echo "Runner did not come online in time."
+          exit 1
