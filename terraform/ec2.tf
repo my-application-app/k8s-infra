@@ -8,6 +8,6 @@ resource "aws_instance" "demo" {
   })
 
   tags = {
-    Name = "aichatbot"
+    Name = ""
   }
 }
