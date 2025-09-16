@@ -59,16 +59,16 @@ helm install prometheus prometheus-community/prometheus \
   --set kubeStateMetrics.enabled=false \
   --set nodeExporter.enabled=false
 
-kubectl patch svc prometheus-server -n monitoring -p '{"spec":{"type":"NodePort","ports":[{"name":"web","port":9090,"targetPort":9090,"nodePort":32000}]}}'
+kubectl patch svc prometheus-server -n monitoring -p '{"spec":{"type":"NodePort","ports":[{"name":"web","port":9090,"targetPort":9090,"nodePort":32080}]}}'
 
 echo "===== Installing Grafana ====="
 helm install grafana grafana/grafana -n monitoring \
   --set persistence.enabled=false \
   --set adminPassword='admin' \
   --set service.type=NodePort \
-  --set service.nodePort=32001
+  --set service.nodePort=32081
 
 export NODE_IP=$(kubectl get nodes -o jsonpath="{.items[0].status.addresses[0].address}")
 
-echo "Prometheus URL: http://$NODE_IP:32000"
-echo "Grafana URL: http://$NODE_IP:32001"
+echo "Prometheus URL: http://$NODE_IP:32080"
+echo "Grafana URL: http://$NODE_IP:32081"
