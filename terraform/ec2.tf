@@ -6,8 +6,4 @@ resource "aws_instance" "demo" {
   user_data = templatefile("${path.module}/setup.sh", {
     runner_token = var.runner_token
   })
-
-  tags = {
-    Name = ""
-  }
 }
