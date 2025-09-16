@@ -19,7 +19,7 @@ sudo chown -R ubuntu:ubuntu /home/ubuntu/actions-runner
 
 # Configure runner as ubuntu user
 sudo -u ubuntu ./config.sh --unattended \
-  --url https://github.com/awsdeployer \
+  --url https://github.com/my-appliocation-app \
   --token "${runner_token}" \
   --name org_runner \
   --work "_work" >> /var/log/runner-config.log 2>&1
