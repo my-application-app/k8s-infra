@@ -60,7 +60,7 @@ jobs:
           for i in $(seq 1 $MAX_RETRIES); do
             STATUS=$(curl -s -H "Authorization: token ${{ secrets.ORG_RUNNER_PAT }}" \
                      -H "Accept: application/vnd.github+json" \
-                     https://api.github.com/orgs/my-appliocation-app/actions/runners \
+                     https://api.github.com/orgs/my-application-app/actions/runners \
                      | jq -r ".runners[] | select(.name==\"$RUNNER_NAME\") | .status")
             if [ "$STATUS" == "online" ]; then
               echo "Runner is online!"
