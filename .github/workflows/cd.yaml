@@ -74,6 +74,26 @@ jobs:
         kubectl apply -f hpa/
         kubectl apply -f ingress/
     
+    - name: Create AWS Secrets
+      run: |
+        echo "🔐 Creating AWS secrets..."
+        
+        # Create AWS secrets using organization secrets
+        cat <<EOF | kubectl apply -f -
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: app-secrets
+          namespace: bedrock-chat-v2
+        type: Opaque
+        stringData:
+          AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
+          AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+          AWS_REGION: "us-east-1"
+        EOF
+        
+        echo "✅ AWS secrets created"
+    
     - name: Deploy Front-End Service
       run: |
         echo "Deploying front-end Kubernetes manifests..."
