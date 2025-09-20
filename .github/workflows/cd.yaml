@@ -1,15 +1,15 @@
 name: Deploy Bedrock Chat Multi-Repo
 on:
   workflow_run:
-    workflows: ["Setup Infra and Deploy GitHub Runner"]  # Replace with your exact Terraform workflow name
+    workflows: ["Setup Infra and Deploy GitHub Runner"]
     types:
       - completed
     branches: [ main, master ]
-  workflow_dispatch:  # Keep manual trigger option
+  workflow_dispatch:
+
 jobs:
   deploy:
     runs-on: self-hosted
-    # Only run if the Terraform workflow succeeded (skip if manually triggered)
     if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     
     steps:
@@ -61,26 +61,20 @@ jobs:
     
     - name: Wait for Ingress Controller Ready
       run: |
-        echo "⏳ Ensuring NGINX ingress controller is ready..."
+        echo "Ensuring NGINX ingress controller is ready..."
+        kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=300s || echo "Ingress controller wait timeout, continuing..."
         
-        # Wait for ingress controller deployment to be ready
-        kubectl wait --namespace ingress-nginx \
-          --for=condition=ready pod \
-          --selector=app.kubernetes.io/component=controller \
-          --timeout=300s || echo "⚠️ Ingress controller wait timeout, continuing..."
-        
-        # Wait for admission webhook to be available
-        echo "⏳ Waiting for ingress admission webhook..."
+        echo "Waiting for ingress admission webhook..."
         for i in {1..20}; do
           if kubectl get validatingwebhookconfiguration ingress-nginx-admission >/dev/null 2>&1; then
-            echo "✅ Admission webhook is ready"
+            echo "Admission webhook is ready"
             break
           fi
           echo "Attempt $i/20: Waiting for admission webhook... (10s)"
           sleep 10
         done
         
-        echo "✅ Ingress controller readiness check completed"
+        echo "Ingress controller readiness check completed"
     
     - name: Deploy Main Repo
       run: |
@@ -96,24 +90,21 @@ jobs:
         kubectl apply -f network-policies/
         kubectl apply -f hpa/
         
-        # Deploy ingress with retry mechanism
-        echo "🌐 Deploying ingress with retry logic..."
+        echo "Deploying ingress with retry logic..."
         for attempt in {1..3}; do
           echo "Ingress deployment attempt $attempt/3"
           if kubectl apply -f ingress/; then
-            echo "✅ Ingress deployed successfully"
+            echo "Ingress deployed successfully"
             break
           else
-            echo "⚠️ Ingress deployment failed, waiting 30s before retry..."
+            echo "Ingress deployment failed, waiting 30s before retry..."
             sleep 30
           fi
         done
     
     - name: Create AWS Secrets
       run: |
-        echo "🔐 Creating AWS secrets..."
-        
-        # Create AWS secrets using organization secrets
+        echo "Creating AWS secrets..."
         cat <<EOF | kubectl apply -f -
         apiVersion: v1
         kind: Secret
@@ -126,8 +117,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_SECRET_ACCESS_KEY }}"
           AWS_REGION: "us-east-1"
         EOF
-        
-        echo "✅ AWS secrets created"
+        echo "AWS secrets created"
     
     - name: Deploy Front-End Service
       run: |
@@ -167,43 +157,37 @@ jobs:
     
     - name: Wait for Application Components
       run: |
-        echo "⏳ Waiting for application components to be ready..."
+        echo "Waiting for application components to be ready..."
         
-        # Wait for MySQL first (foundational service)
-        echo "🗄️ Waiting for MySQL..."
-        kubectl wait --for=condition=ready pod -l app=mysql -n bedrock-chat-v2 --timeout=600s || echo "⚠️ MySQL timeout, continuing..."
+        echo "Waiting for MySQL..."
+        kubectl wait --for=condition=ready pod -l app=mysql -n bedrock-chat-v2 --timeout=600s || echo "MySQL timeout, continuing..."
         
-        # Wait for application services
-        echo "🔧 Waiting for application services..."
-        kubectl wait --for=condition=ready pod -l app=frontend -n bedrock-chat-v2 --timeout=300s || echo "⚠️ Frontend timeout, continuing..."
-        kubectl wait --for=condition=ready pod -l app=api-gateway -n bedrock-chat-v2 --timeout=300s || echo "⚠️ API Gateway timeout, continuing..."
-        kubectl wait --for=condition=ready pod -l app=bedrock-service -n bedrock-chat-v2 --timeout=300s || echo "⚠️ Bedrock Service timeout, continuing..."
-        kubectl wait --for=condition=ready pod -l app=file-service -n bedrock-chat-v2 --timeout=300s || echo "⚠️ File Service timeout, continuing..."
+        echo "Waiting for application services..."
+        kubectl wait --for=condition=ready pod -l app=frontend -n bedrock-chat-v2 --timeout=300s || echo "Frontend timeout, continuing..."
+        kubectl wait --for=condition=ready pod -l app=api-gateway -n bedrock-chat-v2 --timeout=300s || echo "API Gateway timeout, continuing..."
+        kubectl wait --for=condition=ready pod -l app=bedrock-service -n bedrock-chat-v2 --timeout=300s || echo "Bedrock Service timeout, continuing..."
+        kubectl wait --for=condition=ready pod -l app=file-service -n bedrock-chat-v2 --timeout=300s || echo "File Service timeout, continuing..."
         
-        echo "📊 Current pod status:"
+        echo "Current pod status:"
         kubectl get pods -n bedrock-chat-v2
         
-        # Additional stabilization time
-        echo "⏳ Additional stabilization time (60s)..."
+        echo "Additional stabilization time (60s)..."
         sleep 60
     
     - name: Determine Application URL
       id: app_url
       run: |
-        echo "🌐 Determining application access URL..."
+        echo "Determining application access URL..."
         
-        # Initialize variables
         APP_URL=""
         ACCESS_METHOD=""
         
-        # Method 1: Try ingress with LoadBalancer
         INGRESS_IP=$(kubectl get svc ingress-nginx-controller -n ingress-nginx -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
         if [ -n "$INGRESS_IP" ] && [ "$INGRESS_IP" != "null" ]; then
           APP_URL="http://$INGRESS_IP"
           ACCESS_METHOD="ingress-loadbalancer"
         fi
         
-        # Method 2: Try ingress with NodePort
         if [ -z "$APP_URL" ]; then
           NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="ExternalIP")].address}' 2>/dev/null)
           if [ -z "$NODE_IP" ]; then
@@ -217,9 +201,7 @@ jobs:
           fi
         fi
         
-        # Method 3: Direct service access
         if [ -z "$APP_URL" ]; then
-          # Check if frontend service has NodePort
           FRONTEND_NODEPORT=$(kubectl get svc frontend -n bedrock-chat-v2 -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "")
           if [ -n "$FRONTEND_NODEPORT" ] && [ -n "$NODE_IP" ]; then
             APP_URL="http://$NODE_IP:$FRONTEND_NODEPORT"
@@ -227,7 +209,6 @@ jobs:
           fi
         fi
         
-        # Method 4: Localhost fallback
         if [ -z "$APP_URL" ]; then
           APP_URL="http://localhost:80"
           ACCESS_METHOD="localhost-fallback"
@@ -235,54 +216,45 @@ jobs:
         
         echo "APPLICATION_URL=$APP_URL" >> $GITHUB_OUTPUT
         echo "ACCESS_METHOD=$ACCESS_METHOD" >> $GITHUB_OUTPUT
-        echo "🌐 Application URL: $APP_URL (method: $ACCESS_METHOD)"
+        echo "Application URL: $APP_URL (method: $ACCESS_METHOD)"
         
-        # Test URL accessibility
-        echo "🔍 Testing URL accessibility..."
         if timeout 10 curl -f -s "$APP_URL" >/dev/null 2>&1; then
-          echo "✅ URL is accessible"
+          echo "URL is accessible"
           echo "URL_ACCESSIBLE=true" >> $GITHUB_OUTPUT
         else
-          echo "⚠️ URL not immediately accessible (will retry during DAST)"
+          echo "URL not immediately accessible (will retry during DAST)"
           echo "URL_ACCESSIBLE=false" >> $GITHUB_OUTPUT
         fi
     
     - name: Setup DAST Environment
       run: |
-        echo "🛠️ Setting up DAST environment..."
+        echo "Setting up DAST environment..."
         
-        # Ensure Docker is running and accessible
         sudo systemctl start docker
         sudo usermod -aG docker $USER || true
         
-        # Pull ZAP image in advance
-        echo "📦 Pulling OWASP ZAP Docker image..."
-        sudo docker pull ghcr.io/zaproxy/zaproxy:stable || {
-          echo "⚠️ Failed to pull ZAP image, trying alternative..."
-          sudo docker pull owasp/zap2docker-stable || echo "⚠️ Alternative image also failed"
-        }
+        echo "Pulling OWASP ZAP Docker image..."
+        sudo docker pull ghcr.io/zaproxy/zaproxy:stable || echo "Failed to pull ZAP image"
         
-        # Create reports directory
         mkdir -p dast-reports
         chmod 777 dast-reports
         
-        echo "✅ DAST environment setup completed"
+        echo "DAST environment setup completed"
     
     - name: Run DAST Security Scan
       run: |
-        echo "🔒 Starting DAST security scan..."
+        echo "Starting DAST security scan..."
         
         APP_URL="${{ steps.app_url.outputs.APPLICATION_URL }}"
         ACCESS_METHOD="${{ steps.app_url.outputs.ACCESS_METHOD }}"
         URL_ACCESSIBLE="${{ steps.app_url.outputs.URL_ACCESSIBLE }}"
         
-        echo "📋 Scan Configuration:"
+        echo "Scan Configuration:"
         echo "  Target URL: $APP_URL"
         echo "  Access Method: $ACCESS_METHOD"
         echo "  Initially Accessible: $URL_ACCESSIBLE"
         
-        # Extended accessibility test with retry
-        echo "🔍 Extended URL accessibility test..."
+        echo "Extended URL accessibility test..."
         RETRIES=8
         WAIT_TIME=30
         FINAL_ACCESSIBLE=false
@@ -290,134 +262,108 @@ jobs:
         for i in $(seq 1 $RETRIES); do
           echo "  Attempt $i/$RETRIES: Testing $APP_URL"
           if timeout 15 curl -f -s -L "$APP_URL" >/dev/null 2>&1; then
-            echo "  ✅ URL accessible on attempt $i"
+            echo "  URL accessible on attempt $i"
             FINAL_ACCESSIBLE=true
             break
           else
-            echo "  ⏳ Not accessible, waiting ${WAIT_TIME}s..."
+            echo "  Not accessible, waiting ${WAIT_TIME}s..."
             sleep $WAIT_TIME
           fi
         done
         
-        # Create baseline scan summary
-        cat > dast-reports/scan-info.txt << EOF
-DAST Security Scan Information
-==============================
-Scan Date: $(date)
-Target URL: $APP_URL
-Access Method: $ACCESS_METHOD
-Final Accessibility: $FINAL_ACCESSIBLE
-Scanner: OWASP ZAP
-
-Scan Results:
-EOF
+        cat > dast-reports/scan-info.txt << 'EOF'
+        DAST Security Scan Information
+        ==============================
+        EOF
+        echo "Scan Date: $(date)" >> dast-reports/scan-info.txt
+        echo "Target URL: $APP_URL" >> dast-reports/scan-info.txt
+        echo "Access Method: $ACCESS_METHOD" >> dast-reports/scan-info.txt
+        echo "Final Accessibility: $FINAL_ACCESSIBLE" >> dast-reports/scan-info.txt
+        echo "Scanner: OWASP ZAP" >> dast-reports/scan-info.txt
+        echo "" >> dast-reports/scan-info.txt
+        echo "Scan Results:" >> dast-reports/scan-info.txt
         
-        # Run ZAP baseline scan
-        echo "🚀 Running OWASP ZAP baseline scan..."
+        echo "Running OWASP ZAP baseline scan..."
         ZAP_EXIT_CODE=0
         
-        sudo docker run --rm \
-          -v $(pwd)/dast-reports:/zap/wrk/:rw \
-          -t ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
-          -t "$APP_URL" \
-          -r baseline-report.html \
-          -w baseline-report.md \
-          -J baseline-report.json \
-          -d \
-          || ZAP_EXIT_CODE=$?
+        sudo docker run --rm -v $(pwd)/dast-reports:/zap/wrk/:rw -t ghcr.io/zaproxy/zaproxy:stable zap-baseline.py -t "$APP_URL" -r baseline-report.html -w baseline-report.md -J baseline-report.json -d || ZAP_EXIT_CODE=$?
         
         echo "ZAP baseline scan exit code: $ZAP_EXIT_CODE"
         echo "ZAP Exit Code: $ZAP_EXIT_CODE" >> dast-reports/scan-info.txt
         
-        # If baseline fails, try a simple API scan
         if [ ! -f "dast-reports/baseline-report.html" ] && [ "$FINAL_ACCESSIBLE" = "true" ]; then
-          echo "🔄 Baseline scan failed, trying API scan..."
-          sudo docker run --rm \
-            -v $(pwd)/dast-reports:/zap/wrk/:rw \
-            -t ghcr.io/zaproxy/zaproxy:stable zap-api-scan.py \
-            -t "$APP_URL" \
-            -r api-scan-report.html \
-            -w api-scan-report.md \
-            || echo "API scan also completed with warnings"
+          echo "Baseline scan failed, trying API scan..."
+          sudo docker run --rm -v $(pwd)/dast-reports:/zap/wrk/:rw -t ghcr.io/zaproxy/zaproxy:stable zap-api-scan.py -t "$APP_URL" -r api-scan-report.html -w api-scan-report.md || echo "API scan also completed with warnings"
         fi
         
-        # Create fallback report if no scans succeeded
         if [ ! -f "dast-reports/baseline-report.html" ] && [ ! -f "dast-reports/api-scan-report.html" ]; then
-          echo "📝 Creating fallback security report..."
-          cat > dast-reports/fallback-report.html << EOF
-<!DOCTYPE html>
-<html>
-<head><title>DAST Scan Report</title></head>
-<body>
-<h1>DAST Security Scan Report</h1>
-<h2>Scan Status</h2>
-<p><strong>Status:</strong> Scan attempted but application may not have been fully accessible.</p>
-<p><strong>Recommendation:</strong> Verify application deployment and rerun security scan.</p>
-<h2>Next Steps</h2>
-<ul>
-<li>Check application logs for deployment issues</li>
-<li>Verify ingress configuration</li>
-<li>Manually test application accessibility</li>
-<li>Re-run DAST scan when application is confirmed accessible</li>
-</ul>
-</body>
-</html>
-EOF
+          echo "Creating fallback security report..."
+          cat > dast-reports/fallback-report.html << 'EOF'
+        <!DOCTYPE html>
+        <html>
+        <head><title>DAST Scan Report</title></head>
+        <body>
+        <h1>DAST Security Scan Report</h1>
+        <h2>Scan Status</h2>
+        <p><strong>Status:</strong> Scan attempted but application may not have been fully accessible.</p>
+        <p><strong>Recommendation:</strong> Verify application deployment and rerun security scan.</p>
+        <h2>Next Steps</h2>
+        <ul>
+        <li>Check application logs for deployment issues</li>
+        <li>Verify ingress configuration</li>
+        <li>Manually test application accessibility</li>
+        <li>Re-run DAST scan when application is confirmed accessible</li>
+        </ul>
+        </body>
+        </html>
+        EOF
           echo "Fallback report created" >> dast-reports/scan-info.txt
         fi
         
-        echo "✅ DAST scan process completed"
+        echo "DAST scan process completed"
     
     - name: Process DAST Results
       run: |
-        echo "📊 Processing DAST scan results..."
+        echo "Processing DAST scan results..."
         
-        # List all generated files
-        echo "📁 Generated files:"
+        echo "Generated files:"
         ls -la dast-reports/ || echo "No files generated"
         
-        # Process different report types
         REPORTS_FOUND=0
         
-        # Check for baseline report
         if [ -f "dast-reports/baseline-report.html" ]; then
-          echo "✅ Baseline HTML report found"
+          echo "Baseline HTML report found"
           REPORTS_FOUND=$((REPORTS_FOUND + 1))
         fi
         
         if [ -f "dast-reports/baseline-report.md" ]; then
-          echo "✅ Baseline Markdown report found"
-          echo "📋 Baseline scan summary:"
+          echo "Baseline Markdown report found"
+          echo "Baseline scan summary:"
           head -20 "dast-reports/baseline-report.md" || echo "Could not read markdown report"
         fi
         
-        # Check for API scan report
         if [ -f "dast-reports/api-scan-report.html" ]; then
-          echo "✅ API scan HTML report found"
+          echo "API scan HTML report found"
           REPORTS_FOUND=$((REPORTS_FOUND + 1))
         fi
         
-        # Check for fallback report
         if [ -f "dast-reports/fallback-report.html" ]; then
-          echo "ℹ️ Fallback report found"
+          echo "Fallback report found"
           REPORTS_FOUND=$((REPORTS_FOUND + 1))
         fi
         
-        # Security analysis
-        echo "🔍 Security analysis:"
+        echo "Security analysis:"
         if [ $REPORTS_FOUND -gt 0 ]; then
-          # Look for high-risk findings
           if grep -i "high\|critical" dast-reports/*.html dast-reports/*.md 2>/dev/null | head -5; then
-            echo "🚨 Potential high-risk security issues detected!"
-            echo "📄 Review the detailed reports for more information."
+            echo "Potential high-risk security issues detected!"
+            echo "Review the detailed reports for more information."
           else
-            echo "✅ No critical security issues detected in scan."
+            echo "No critical security issues detected in scan."
           fi
         else
-          echo "⚠️ No security reports generated - application may not have been accessible."
+          echo "No security reports generated - application may not have been accessible."
         fi
         
-        # Update scan info with results
         echo "" >> dast-reports/scan-info.txt
         echo "Reports Generated: $REPORTS_FOUND" >> dast-reports/scan-info.txt
         echo "Scan Completed: $(date)" >> dast-reports/scan-info.txt
@@ -432,18 +378,18 @@ EOF
     
     - name: Final Status Check
       run: |
-        echo "🎉 Deployment completed for all services!"
+        echo "Deployment completed for all services!"
         
-        echo "📊 Current status:"
+        echo "Current status:"
         kubectl get all -n bedrock-chat-v2
         
-        echo "🔍 Checking pods status:"
+        echo "Checking pods status:"
         kubectl get pods -n bedrock-chat-v2 -o wide
         
-        echo "🌐 Checking services:"
+        echo "Checking services:"
         kubectl get services -n bedrock-chat-v2
         
-        echo "🔒 DAST Security Scan Summary:"
+        echo "DAST Security Scan Summary:"
         echo "================================"
         if [ -f "dast-reports/scan-info.txt" ]; then
           cat dast-reports/scan-info.txt
@@ -452,6 +398,6 @@ EOF
         fi
         
         echo ""
-        echo "✅ Pipeline completed successfully!"
-        echo "📄 Security reports uploaded as artifacts"
-        echo "🌐 Application URL: ${{ steps.app_url.outputs.APPLICATION_URL }}"
+        echo "Pipeline completed successfully!"
+        echo "Security reports uploaded as artifacts"
+        echo "Application URL: ${{ steps.app_url.outputs.APPLICATION_URL }}"
