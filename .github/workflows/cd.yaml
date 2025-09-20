@@ -344,7 +344,7 @@ EOF
         # Create fallback report if no scans succeeded
         if [ ! -f "dast-reports/baseline-report.html" ] && [ ! -f "dast-reports/api-scan-report.html" ]; then
           echo "📝 Creating fallback security report..."
-          cat > dast-reports/fallback-report.html << 'EOF'
+          cat > dast-reports/fallback-report.html << EOF
 <!DOCTYPE html>
 <html>
 <head><title>DAST Scan Report</title></head>
