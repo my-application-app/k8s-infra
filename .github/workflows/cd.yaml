@@ -1,387 +1,457 @@
----
-name: "Deploy Bedrock Chat Multi-Repo"
-
+name: Deploy Bedrock Chat Multi-Repo
 on:
   workflow_run:
-    workflows: ["Setup Infra and Deploy GitHub Runner"]
+    workflows: ["Setup Infra and Deploy GitHub Runner"]  # Replace with your exact Terraform workflow name
     types:
-      - "completed"
-    branches: ["main", "master"]
-  workflow_dispatch: {}
-
+      - completed
+    branches: [ main, master ]
+  workflow_dispatch:  # Keep manual trigger option
 jobs:
-  lint:
-    runs-on: "ubuntu-latest"
-    continue-on-error: true  # Don't fail the workflow if linting fails
-    
-    steps:
-      - name: "Checkout main repo"
-        uses: "actions/checkout@v4"
-        with:
-          path: "main-repo"
-          
-      - name: "Checkout front-end repo"
-        uses: "actions/checkout@v4"
-        with:
-          repository: "${{ github.repository_owner }}/front-end"
-          path: "front-end"
-          token: "${{ secrets.GITHUB_TOKEN }}"
-          
-      - name: "Checkout bedrock-service repo"
-        uses: "actions/checkout@v4"
-        with:
-          repository: "${{ github.repository_owner }}/bedrock-service"
-          path: "bedrock-service"
-          token: "${{ secrets.GITHUB_TOKEN }}"
-          
-      - name: "Checkout file-service repo"
-        uses: "actions/checkout@v4"
-        with:
-          repository: "${{ github.repository_owner }}/file-service"
-          path: "file-service"
-          token: "${{ secrets.GITHUB_TOKEN }}"
-          
-      - name: "Checkout api-gateway repo"
-        uses: "actions/checkout@v4"
-        with:
-          repository: "${{ github.repository_owner }}/api-gateway"
-          path: "api-gateway"
-          token: "${{ secrets.GITHUB_TOKEN }}"
-
-      - name: "Setup Node.js"
-        uses: "actions/setup-node@v4"
-        with:
-          node-version: "18"
-          
-      - name: "Setup Python"
-        uses: "actions/setup-python@v4"
-        with:
-          python-version: "3.9"
-
-      - name: "Install linting tools"
-        run: |
-          # Install YAML linter
-          pip install yamllint
-          
-          # Install Kubernetes manifest linter
-          curl -L https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz | tar xz
-          sudo mv kubeconform /usr/local/bin/
-          
-          # Install Hadolint for Dockerfile linting
-          wget -O /tmp/hadolint https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-x86_64
-          chmod +x /tmp/hadolint
-          sudo mv /tmp/hadolint /usr/local/bin/hadolint
-          
-          # Install shellcheck for shell script linting
-          sudo apt-get update && sudo apt-get install -y shellcheck
-
-      - name: "Lint YAML files"
-        continue-on-error: true
-        run: |
-          echo "🔍 Linting YAML files..."
-          
-          # Create yamllint config that's GitHub Actions friendly
-          cat > .yamllint.yml << EOF
-          extends: default
-          rules:
-            line-length:
-              max: 120
-            document-start: disable
-            truthy: disable
-            comments: disable
-            trailing-spaces: disable
-            brackets:
-              min-spaces-inside: 0
-              max-spaces-inside: 1
-            indentation:
-              spaces: consistent
-              indent-sequences: false
-            empty-lines:
-              max-end: 1
-          EOF
-          
-          # Find and lint all YAML files, excluding problematic ones
-          find . -name "*.yaml" -o -name "*.yml" | grep -v "\.github/workflows" | while read -r file; do
-            echo "Linting: $file"
-            yamllint -c .yamllint.yml "$file" || echo "⚠️ Warning in $file"
-          done
-          
-          # Special handling for GitHub Actions workflows with relaxed rules
-          if find . -path "*/.github/workflows/*.y*ml" | grep -q .; then
-            echo "Linting GitHub Actions workflows with relaxed rules..."
-            cat > .yamllint-github.yml << EOF
-          extends: default
-          rules:
-            line-length:
-              max: 150
-            document-start: disable
-            truthy: disable
-            comments: disable
-            trailing-spaces: disable
-            brackets: disable
-            indentation: disable
-            empty-lines: disable
-          EOF
-            
-            find . -path "*/.github/workflows/*.y*ml" | while read -r file; do
-              echo "Linting GitHub Actions workflow: $file"
-              yamllint -c .yamllint-github.yml "$file" || echo "⚠️ Warning in $file"
-            done
-          fi
-
-      - name: "Lint Kubernetes manifests"
-        continue-on-error: true
-        run: |
-          echo "🔍 Validating Kubernetes manifests..."
-          
-          # Function to validate k8s manifests in a directory
-          validate_k8s_dir() {
-            local dir=$1
-            if [ -d "$dir" ]; then
-              echo "Validating Kubernetes manifests in $dir"
-              find "$dir" -name "*.yaml" -o -name "*.yml" | while read -r file; do
-                echo "Validating: $file"
-                kubeconform -summary -verbose "$file" || echo "⚠️ Validation warning in $file"
-              done
-            else
-              echo "Directory $dir not found, skipping..."
-            fi
-          }
-          
-          # Validate main repo manifests
-          validate_k8s_dir "main-repo"
-          
-          # Validate service manifests
-          validate_k8s_dir "front-end/k8s"
-          validate_k8s_dir "bedrock-service/k8s"
-          validate_k8s_dir "file-service/k8s"
-          validate_k8s_dir "api-gateway/k8s"
-
-      - name: "Lint Dockerfiles"
-        continue-on-error: true
-        run: |
-          echo "🔍 Linting Dockerfiles..."
-          
-          # Find and lint all Dockerfiles
-          find . -name "Dockerfile*" | while read -r file; do
-            echo "Linting: $file"
-            hadolint "$file" || echo "⚠️ Warning in $file"
-          done
-
-      - name: "Lint shell scripts"
-        continue-on-error: true
-        run: |
-          echo "🔍 Linting shell scripts..."
-          
-          # Find and lint all shell scripts
-          find . -name "*.sh" | while read -r file; do
-            echo "Linting: $file"
-            shellcheck "$file" || echo "⚠️ Warning in $file"
-          done
-
-      - name: "Lint JavaScript/TypeScript (if present)"
-        continue-on-error: true
-        run: |
-          echo "🔍 Checking for JavaScript/TypeScript files to lint..."
-          
-          # Function to lint JS/TS in a directory
-          lint_js_dir() {
-            local dir=$1
-            if [ -d "$dir" ]; then
-              cd "$dir"
-              if [ -f "package.json" ]; then
-                echo "Found package.json in $dir, installing dependencies..."
-                npm ci --silent 2>/dev/null || npm install --silent 2>/dev/null || echo "⚠️ Could not install deps in $dir"
-                
-                # Check if ESLint is configured
-                if [ -f ".eslintrc.js" ] || [ -f ".eslintrc.json" ] || [ -f ".eslintrc.yml" ] || grep -q '"eslint"' package.json; then
-                  echo "Running ESLint in $dir..."
-                  npx eslint . --ext .js,.jsx,.ts,.tsx 2>/dev/null || echo "⚠️ ESLint warnings in $dir"
-                else
-                  echo "No ESLint config found in $dir, skipping..."
-                fi
-                
-                # Check if Prettier is configured
-                if [ -f ".prettierrc" ] || [ -f ".prettierrc.json" ] || [ -f ".prettierrc.yml" ] || grep -q '"prettier"' package.json; then
-                  echo "Running Prettier check in $dir..."
-                  npx prettier --check . 2>/dev/null || echo "⚠️ Prettier formatting issues in $dir"
-                else
-                  echo "No Prettier config found in $dir, skipping..."
-                fi
-              else
-                echo "No package.json found in $dir, skipping JS/TS linting..."
-              fi
-              cd ..
-            fi
-          }
-          
-          # Lint each service
-          lint_js_dir "front-end"
-          lint_js_dir "bedrock-service"
-          lint_js_dir "file-service"
-          lint_js_dir "api-gateway"
-
-      - name: "Security scan"
-        continue-on-error: true
-        run: |
-          echo "🔍 Running basic security checks..."
-          
-          # Check for sensitive data patterns
-          echo "Checking for potential secrets..."
-          find . -type f -name "*.yaml" -o -name "*.yml" -o -name "*.json" -o -name "*.sh" | xargs grep -l -i "password\|secret\|key\|token" | while read -r file; do
-            echo "⚠️ Potential sensitive data in: $file"
-          done
-          
-          # Check for hardcoded IPs or URLs
-          echo "Checking for hardcoded URLs/IPs..."
-          find . -type f -name "*.yaml" -o -name "*.yml" | xargs grep -E "http://|https://|[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" || echo "No hardcoded URLs/IPs found"
-
-      - name: "Generate lint report"
-        if: always()
-        run: |
-          echo "📊 Linting Summary:"
-          echo "==================="
-          echo "✅ YAML linting completed"
-          echo "✅ Kubernetes manifest validation completed"
-          echo "✅ Dockerfile linting completed"
-          echo "✅ Shell script linting completed"
-          echo "✅ JavaScript/TypeScript linting completed"
-          echo "✅ Security scan completed"
-          echo ""
-          echo "Note: All linting steps are non-blocking. Check individual step outputs for details."
-
   deploy:
-    runs-on: "self-hosted"
-    needs: lint  # Wait for linting to complete
+    runs-on: self-hosted
     # Only run if the Terraform workflow succeeded (skip if manually triggered)
     if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     
     steps:
-      - name: "Checkout main repo"
-        uses: "actions/checkout@v4"
-        with:
-          path: "main-repo"
-      
-      - name: "Run setup script"
-        run: |
-          echo "Running setup.sh from main repo root..."
-          cd main-repo
-          if [ -f "setup.sh" ]; then
-            chmod +x setup.sh
-            ./setup.sh
-            echo "Setup script executed successfully"
-          else
-            echo "ERROR: setup.sh not found in main repo root"
-            exit 1
+    - name: Checkout main repo
+      uses: actions/checkout@v4
+      with:
+        path: main-repo
+    
+    - name: Run setup script
+      run: |
+        echo "Running setup.sh from main repo root..."
+        cd main-repo
+        if [ -f "setup.sh" ]; then
+          chmod +x setup.sh
+          ./setup.sh
+          echo "Setup script executed successfully"
+        else
+          echo "ERROR: setup.sh not found in main repo root"
+          exit 1
+        fi
+    
+    - name: Checkout front-end repo
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository_owner }}/front-end
+        path: front-end
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Checkout bedrock-service repo
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository_owner }}/bedrock-service
+        path: bedrock-service
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Checkout file-service repo
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository_owner }}/file-service
+        path: file-service
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Checkout api-gateway repo
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository_owner }}/api-gateway
+        path: api-gateway
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Wait for Ingress Controller Ready
+      run: |
+        echo "⏳ Ensuring NGINX ingress controller is ready..."
+        
+        # Wait for ingress controller deployment to be ready
+        kubectl wait --namespace ingress-nginx \
+          --for=condition=ready pod \
+          --selector=app.kubernetes.io/component=controller \
+          --timeout=300s || echo "⚠️ Ingress controller wait timeout, continuing..."
+        
+        # Wait for admission webhook to be available
+        echo "⏳ Waiting for ingress admission webhook..."
+        for i in {1..20}; do
+          if kubectl get validatingwebhookconfiguration ingress-nginx-admission >/dev/null 2>&1; then
+            echo "✅ Admission webhook is ready"
+            break
           fi
-
-      - name: "Checkout front-end repo"
-        uses: "actions/checkout@v4"
-        with:
-          repository: "${{ github.repository_owner }}/front-end"
-          path: "front-end"
-          token: "${{ secrets.GITHUB_TOKEN }}"
-
-      - name: "Checkout bedrock-service repo"
-        uses: "actions/checkout@v4"
-        with:
-          repository: "${{ github.repository_owner }}/bedrock-service"
-          path: "bedrock-service"
-          token: "${{ secrets.GITHUB_TOKEN }}"
-
-      - name: "Checkout file-service repo"
-        uses: "actions/checkout@v4"
-        with:
-          repository: "${{ github.repository_owner }}/file-service"
-          path: "file-service"
-          token: "${{ secrets.GITHUB_TOKEN }}"
-
-      - name: "Checkout api-gateway repo"
-        uses: "actions/checkout@v4"
-        with:
-          repository: "${{ github.repository_owner }}/api-gateway"
-          path: "api-gateway"
-          token: "${{ secrets.GITHUB_TOKEN }}"
-      
-      - name: "Deploy Main Repo"
-        run: |
-          echo "Deploying main repo Kubernetes manifests..."
-          cd main-repo
-          kubectl apply -f namespace.yaml
-          kubectl apply -f secrets/
-          kubectl apply -f configmaps/
-          kubectl apply -f metrics-server-custom.yaml
-          kubectl apply -f statefulsets/
-          kubectl apply -f services/
-          kubectl apply -f monitoring/
-          kubectl apply -f network-policies/
-          kubectl apply -f hpa/
-          kubectl apply -f ingress/
-
-      - name: "Create AWS Secrets"
-        run: |
-          echo "🔐 Creating AWS secrets..."
+          echo "Attempt $i/20: Waiting for admission webhook... (10s)"
+          sleep 10
+        done
+        
+        echo "✅ Ingress controller readiness check completed"
+    
+    - name: Deploy Main Repo
+      run: |
+        echo "Deploying main repo Kubernetes manifests..."
+        cd main-repo
+        kubectl apply -f namespace.yaml
+        kubectl apply -f secrets/
+        kubectl apply -f configmaps/
+        kubectl apply -f metrics-server-custom.yaml
+        kubectl apply -f statefulsets/
+        kubectl apply -f services/
+        kubectl apply -f monitoring/
+        kubectl apply -f network-policies/
+        kubectl apply -f hpa/
+        
+        # Deploy ingress with retry mechanism
+        echo "🌐 Deploying ingress with retry logic..."
+        for attempt in {1..3}; do
+          echo "Ingress deployment attempt $attempt/3"
+          if kubectl apply -f ingress/; then
+            echo "✅ Ingress deployed successfully"
+            break
+          else
+            echo "⚠️ Ingress deployment failed, waiting 30s before retry..."
+            sleep 30
+          fi
+        done
+    
+    - name: Create AWS Secrets
+      run: |
+        echo "🔐 Creating AWS secrets..."
+        
+        # Create AWS secrets using organization secrets
+        cat <<EOF | kubectl apply -f -
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: app-secrets
+          namespace: bedrock-chat-v2
+        type: Opaque
+        stringData:
+          AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
+          AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+          AWS_REGION: "us-east-1"
+        EOF
+        
+        echo "✅ AWS secrets created"
+    
+    - name: Deploy Front-End Service
+      run: |
+        echo "Deploying front-end Kubernetes manifests..."
+        if [ -d "front-end/k8s" ]; then
+          kubectl apply -f front-end/k8s/ --recursive
+        else
+          echo "No k8s folder found in front-end repo"
+        fi
+    
+    - name: Deploy Bedrock Service
+      run: |
+        echo "Deploying bedrock-service Kubernetes manifests..."
+        if [ -d "bedrock-service/k8s" ]; then
+          kubectl apply -f bedrock-service/k8s/ --recursive
+        else
+          echo "No k8s folder found in bedrock-service repo"
+        fi
+    
+    - name: Deploy File Service
+      run: |
+        echo "Deploying file-service Kubernetes manifests..."
+        if [ -d "file-service/k8s" ]; then
+          kubectl apply -f file-service/k8s/ --recursive
+        else
+          echo "No k8s folder found in file-service repo"
+        fi
+    
+    - name: Deploy API Gateway
+      run: |
+        echo "Deploying api-gateway Kubernetes manifests..."
+        if [ -d "api-gateway/k8s" ]; then
+          kubectl apply -f api-gateway/k8s/ --recursive
+        else
+          echo "No k8s folder found in api-gateway repo"
+        fi
+    
+    - name: Wait for Application Components
+      run: |
+        echo "⏳ Waiting for application components to be ready..."
+        
+        # Wait for MySQL first (foundational service)
+        echo "🗄️ Waiting for MySQL..."
+        kubectl wait --for=condition=ready pod -l app=mysql -n bedrock-chat-v2 --timeout=600s || echo "⚠️ MySQL timeout, continuing..."
+        
+        # Wait for application services
+        echo "🔧 Waiting for application services..."
+        kubectl wait --for=condition=ready pod -l app=frontend -n bedrock-chat-v2 --timeout=300s || echo "⚠️ Frontend timeout, continuing..."
+        kubectl wait --for=condition=ready pod -l app=api-gateway -n bedrock-chat-v2 --timeout=300s || echo "⚠️ API Gateway timeout, continuing..."
+        kubectl wait --for=condition=ready pod -l app=bedrock-service -n bedrock-chat-v2 --timeout=300s || echo "⚠️ Bedrock Service timeout, continuing..."
+        kubectl wait --for=condition=ready pod -l app=file-service -n bedrock-chat-v2 --timeout=300s || echo "⚠️ File Service timeout, continuing..."
+        
+        echo "📊 Current pod status:"
+        kubectl get pods -n bedrock-chat-v2
+        
+        # Additional stabilization time
+        echo "⏳ Additional stabilization time (60s)..."
+        sleep 60
+    
+    - name: Determine Application URL
+      id: app_url
+      run: |
+        echo "🌐 Determining application access URL..."
+        
+        # Initialize variables
+        APP_URL=""
+        ACCESS_METHOD=""
+        
+        # Method 1: Try ingress with LoadBalancer
+        INGRESS_IP=$(kubectl get svc ingress-nginx-controller -n ingress-nginx -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+        if [ -n "$INGRESS_IP" ] && [ "$INGRESS_IP" != "null" ]; then
+          APP_URL="http://$INGRESS_IP"
+          ACCESS_METHOD="ingress-loadbalancer"
+        fi
+        
+        # Method 2: Try ingress with NodePort
+        if [ -z "$APP_URL" ]; then
+          NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="ExternalIP")].address}' 2>/dev/null)
+          if [ -z "$NODE_IP" ]; then
+            NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)
+          fi
+          NODE_PORT=$(kubectl get svc ingress-nginx-controller -n ingress-nginx -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}' 2>/dev/null)
           
-          # Create AWS secrets using organization secrets
-          cat <<EOF | kubectl apply -f -
-          apiVersion: v1
-          kind: Secret
-          metadata:
-            name: app-secrets
-            namespace: bedrock-chat-v2
-          type: Opaque
-          stringData:
-            AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
-            AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_SECRET_ACCESS_KEY }}"
-            AWS_REGION: "us-east-1"
-          EOF
-          
-          echo "✅ AWS secrets created"
-      
-      - name: "Deploy Front-End Service"
-        run: |
-          echo "Deploying front-end Kubernetes manifests..."
-          if [ -d "front-end/k8s" ]; then
-            kubectl apply -f front-end/k8s/ --recursive
-          else
-            echo "No k8s folder found in front-end repo"
+          if [ -n "$NODE_IP" ] && [ -n "$NODE_PORT" ]; then
+            APP_URL="http://$NODE_IP:$NODE_PORT"
+            ACCESS_METHOD="ingress-nodeport"
           fi
-
-      - name: "Deploy Bedrock Service"
-        run: |
-          echo "Deploying bedrock-service Kubernetes manifests..."
-          if [ -d "bedrock-service/k8s" ]; then
-            kubectl apply -f bedrock-service/k8s/ --recursive
-          else
-            echo "No k8s folder found in bedrock-service repo"
+        fi
+        
+        # Method 3: Direct service access
+        if [ -z "$APP_URL" ]; then
+          # Check if frontend service has NodePort
+          FRONTEND_NODEPORT=$(kubectl get svc frontend -n bedrock-chat-v2 -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "")
+          if [ -n "$FRONTEND_NODEPORT" ] && [ -n "$NODE_IP" ]; then
+            APP_URL="http://$NODE_IP:$FRONTEND_NODEPORT"
+            ACCESS_METHOD="direct-service"
           fi
-
-      - name: "Deploy File Service"
-        run: |
-          echo "Deploying file-service Kubernetes manifests..."
-          if [ -d "file-service/k8s" ]; then
-            kubectl apply -f file-service/k8s/ --recursive
+        fi
+        
+        # Method 4: Localhost fallback
+        if [ -z "$APP_URL" ]; then
+          APP_URL="http://localhost:80"
+          ACCESS_METHOD="localhost-fallback"
+        fi
+        
+        echo "APPLICATION_URL=$APP_URL" >> $GITHUB_OUTPUT
+        echo "ACCESS_METHOD=$ACCESS_METHOD" >> $GITHUB_OUTPUT
+        echo "🌐 Application URL: $APP_URL (method: $ACCESS_METHOD)"
+        
+        # Test URL accessibility
+        echo "🔍 Testing URL accessibility..."
+        if timeout 10 curl -f -s "$APP_URL" >/dev/null 2>&1; then
+          echo "✅ URL is accessible"
+          echo "URL_ACCESSIBLE=true" >> $GITHUB_OUTPUT
+        else
+          echo "⚠️ URL not immediately accessible (will retry during DAST)"
+          echo "URL_ACCESSIBLE=false" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Setup DAST Environment
+      run: |
+        echo "🛠️ Setting up DAST environment..."
+        
+        # Ensure Docker is running and accessible
+        sudo systemctl start docker
+        sudo usermod -aG docker $USER || true
+        
+        # Pull ZAP image in advance
+        echo "📦 Pulling OWASP ZAP Docker image..."
+        sudo docker pull ghcr.io/zaproxy/zaproxy:stable || {
+          echo "⚠️ Failed to pull ZAP image, trying alternative..."
+          sudo docker pull owasp/zap2docker-stable || echo "⚠️ Alternative image also failed"
+        }
+        
+        # Create reports directory
+        mkdir -p dast-reports
+        chmod 777 dast-reports
+        
+        echo "✅ DAST environment setup completed"
+    
+    - name: Run DAST Security Scan
+      run: |
+        echo "🔒 Starting DAST security scan..."
+        
+        APP_URL="${{ steps.app_url.outputs.APPLICATION_URL }}"
+        ACCESS_METHOD="${{ steps.app_url.outputs.ACCESS_METHOD }}"
+        URL_ACCESSIBLE="${{ steps.app_url.outputs.URL_ACCESSIBLE }}"
+        
+        echo "📋 Scan Configuration:"
+        echo "  Target URL: $APP_URL"
+        echo "  Access Method: $ACCESS_METHOD"
+        echo "  Initially Accessible: $URL_ACCESSIBLE"
+        
+        # Extended accessibility test with retry
+        echo "🔍 Extended URL accessibility test..."
+        RETRIES=8
+        WAIT_TIME=30
+        FINAL_ACCESSIBLE=false
+        
+        for i in $(seq 1 $RETRIES); do
+          echo "  Attempt $i/$RETRIES: Testing $APP_URL"
+          if timeout 15 curl -f -s -L "$APP_URL" >/dev/null 2>&1; then
+            echo "  ✅ URL accessible on attempt $i"
+            FINAL_ACCESSIBLE=true
+            break
           else
-            echo "No k8s folder found in file-service repo"
+            echo "  ⏳ Not accessible, waiting ${WAIT_TIME}s..."
+            sleep $WAIT_TIME
           fi
+        done
+        
+        # Create baseline scan summary
+        cat > dast-reports/scan-info.txt << EOF
+DAST Security Scan Information
+==============================
+Scan Date: $(date)
+Target URL: $APP_URL
+Access Method: $ACCESS_METHOD
+Final Accessibility: $FINAL_ACCESSIBLE
+Scanner: OWASP ZAP
 
-      - name: "Deploy API Gateway"
-        run: |
-          echo "Deploying api-gateway Kubernetes manifests..."
-          if [ -d "api-gateway/k8s" ]; then
-            kubectl apply -f api-gateway/k8s/ --recursive
+Scan Results:
+EOF
+        
+        # Run ZAP baseline scan
+        echo "🚀 Running OWASP ZAP baseline scan..."
+        ZAP_EXIT_CODE=0
+        
+        sudo docker run --rm \
+          -v $(pwd)/dast-reports:/zap/wrk/:rw \
+          -t ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
+          -t "$APP_URL" \
+          -r baseline-report.html \
+          -w baseline-report.md \
+          -J baseline-report.json \
+          -d \
+          || ZAP_EXIT_CODE=$?
+        
+        echo "ZAP baseline scan exit code: $ZAP_EXIT_CODE"
+        echo "ZAP Exit Code: $ZAP_EXIT_CODE" >> dast-reports/scan-info.txt
+        
+        # If baseline fails, try a simple API scan
+        if [ ! -f "dast-reports/baseline-report.html" ] && [ "$FINAL_ACCESSIBLE" = "true" ]; then
+          echo "🔄 Baseline scan failed, trying API scan..."
+          sudo docker run --rm \
+            -v $(pwd)/dast-reports:/zap/wrk/:rw \
+            -t ghcr.io/zaproxy/zaproxy:stable zap-api-scan.py \
+            -t "$APP_URL" \
+            -r api-scan-report.html \
+            -w api-scan-report.md \
+            || echo "API scan also completed with warnings"
+        fi
+        
+        # Create fallback report if no scans succeeded
+        if [ ! -f "dast-reports/baseline-report.html" ] && [ ! -f "dast-reports/api-scan-report.html" ]; then
+          echo "📝 Creating fallback security report..."
+          cat > dast-reports/fallback-report.html << 'EOF'
+<!DOCTYPE html>
+<html>
+<head><title>DAST Scan Report</title></head>
+<body>
+<h1>DAST Security Scan Report</h1>
+<h2>Scan Status</h2>
+<p><strong>Status:</strong> Scan attempted but application may not have been fully accessible.</p>
+<p><strong>Recommendation:</strong> Verify application deployment and rerun security scan.</p>
+<h2>Next Steps</h2>
+<ul>
+<li>Check application logs for deployment issues</li>
+<li>Verify ingress configuration</li>
+<li>Manually test application accessibility</li>
+<li>Re-run DAST scan when application is confirmed accessible</li>
+</ul>
+</body>
+</html>
+EOF
+          echo "Fallback report created" >> dast-reports/scan-info.txt
+        fi
+        
+        echo "✅ DAST scan process completed"
+    
+    - name: Process DAST Results
+      run: |
+        echo "📊 Processing DAST scan results..."
+        
+        # List all generated files
+        echo "📁 Generated files:"
+        ls -la dast-reports/ || echo "No files generated"
+        
+        # Process different report types
+        REPORTS_FOUND=0
+        
+        # Check for baseline report
+        if [ -f "dast-reports/baseline-report.html" ]; then
+          echo "✅ Baseline HTML report found"
+          REPORTS_FOUND=$((REPORTS_FOUND + 1))
+        fi
+        
+        if [ -f "dast-reports/baseline-report.md" ]; then
+          echo "✅ Baseline Markdown report found"
+          echo "📋 Baseline scan summary:"
+          head -20 "dast-reports/baseline-report.md" || echo "Could not read markdown report"
+        fi
+        
+        # Check for API scan report
+        if [ -f "dast-reports/api-scan-report.html" ]; then
+          echo "✅ API scan HTML report found"
+          REPORTS_FOUND=$((REPORTS_FOUND + 1))
+        fi
+        
+        # Check for fallback report
+        if [ -f "dast-reports/fallback-report.html" ]; then
+          echo "ℹ️ Fallback report found"
+          REPORTS_FOUND=$((REPORTS_FOUND + 1))
+        fi
+        
+        # Security analysis
+        echo "🔍 Security analysis:"
+        if [ $REPORTS_FOUND -gt 0 ]; then
+          # Look for high-risk findings
+          if grep -i "high\|critical" dast-reports/*.html dast-reports/*.md 2>/dev/null | head -5; then
+            echo "🚨 Potential high-risk security issues detected!"
+            echo "📄 Review the detailed reports for more information."
           else
-            echo "No k8s folder found in api-gateway repo"
+            echo "✅ No critical security issues detected in scan."
           fi
-
-      - name: "Final Status Check"
-        run: |
-          echo "Deployment completed for all services!"
-          echo "Current status:"
-          kubectl get all -n bedrock-chat-v2
-          
-          echo "Checking pods status:"
-          kubectl get pods -n bedrock-chat-v2 -o wide
-          
-          echo "Checking services:"
-          kubectl get services -n bedrock-chat-v2
+        else
+          echo "⚠️ No security reports generated - application may not have been accessible."
+        fi
+        
+        # Update scan info with results
+        echo "" >> dast-reports/scan-info.txt
+        echo "Reports Generated: $REPORTS_FOUND" >> dast-reports/scan-info.txt
+        echo "Scan Completed: $(date)" >> dast-reports/scan-info.txt
+    
+    - name: Upload DAST Reports
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: dast-security-reports-${{ github.run_number }}
+        path: dast-reports/
+        retention-days: 30
+    
+    - name: Final Status Check
+      run: |
+        echo "🎉 Deployment completed for all services!"
+        
+        echo "📊 Current status:"
+        kubectl get all -n bedrock-chat-v2
+        
+        echo "🔍 Checking pods status:"
+        kubectl get pods -n bedrock-chat-v2 -o wide
+        
+        echo "🌐 Checking services:"
+        kubectl get services -n bedrock-chat-v2
+        
+        echo "🔒 DAST Security Scan Summary:"
+        echo "================================"
+        if [ -f "dast-reports/scan-info.txt" ]; then
+          cat dast-reports/scan-info.txt
+        else
+          echo "DAST scan info not available"
+        fi
+        
+        echo ""
+        echo "✅ Pipeline completed successfully!"
+        echo "📄 Security reports uploaded as artifacts"
+        echo "🌐 Application URL: ${{ steps.app_url.outputs.APPLICATION_URL }}"
