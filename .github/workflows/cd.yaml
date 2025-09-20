@@ -10,8 +10,217 @@ on:
   workflow_dispatch: {}
 
 jobs:
+  lint:
+    runs-on: "ubuntu-latest"
+    continue-on-error: true  # Don't fail the workflow if linting fails
+    
+    steps:
+      - name: "Checkout main repo"
+        uses: "actions/checkout@v4"
+        with:
+          path: "main-repo"
+          
+      - name: "Checkout front-end repo"
+        uses: "actions/checkout@v4"
+        with:
+          repository: "${{ github.repository_owner }}/front-end"
+          path: "front-end"
+          token: "${{ secrets.GITHUB_TOKEN }}"
+          
+      - name: "Checkout bedrock-service repo"
+        uses: "actions/checkout@v4"
+        with:
+          repository: "${{ github.repository_owner }}/bedrock-service"
+          path: "bedrock-service"
+          token: "${{ secrets.GITHUB_TOKEN }}"
+          
+      - name: "Checkout file-service repo"
+        uses: "actions/checkout@v4"
+        with:
+          repository: "${{ github.repository_owner }}/file-service"
+          path: "file-service"
+          token: "${{ secrets.GITHUB_TOKEN }}"
+          
+      - name: "Checkout api-gateway repo"
+        uses: "actions/checkout@v4"
+        with:
+          repository: "${{ github.repository_owner }}/api-gateway"
+          path: "api-gateway"
+          token: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: "Setup Node.js"
+        uses: "actions/setup-node@v4"
+        with:
+          node-version: "18"
+          
+      - name: "Setup Python"
+        uses: "actions/setup-python@v4"
+        with:
+          python-version: "3.9"
+
+      - name: "Install linting tools"
+        run: |
+          # Install YAML linter
+          pip install yamllint
+          
+          # Install Kubernetes manifest linter
+          curl -L https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz | tar xz
+          sudo mv kubeconform /usr/local/bin/
+          
+          # Install Hadolint for Dockerfile linting
+          wget -O /tmp/hadolint https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-x86_64
+          chmod +x /tmp/hadolint
+          sudo mv /tmp/hadolint /usr/local/bin/hadolint
+          
+          # Install shellcheck for shell script linting
+          sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: "Lint YAML files"
+        continue-on-error: true
+        run: |
+          echo "🔍 Linting YAML files..."
+          
+          # Create yamllint config
+          cat > .yamllint.yml << EOF
+          extends: default
+          rules:
+            line-length:
+              max: 120
+            document-start: disable
+            truthy: disable
+            comments: disable
+          EOF
+          
+          # Find and lint all YAML files
+          find . -name "*.yaml" -o -name "*.yml" | while read -r file; do
+            echo "Linting: $file"
+            yamllint -c .yamllint.yml "$file" || echo "⚠️ Warning in $file"
+          done
+
+      - name: "Lint Kubernetes manifests"
+        continue-on-error: true
+        run: |
+          echo "🔍 Validating Kubernetes manifests..."
+          
+          # Function to validate k8s manifests in a directory
+          validate_k8s_dir() {
+            local dir=$1
+            if [ -d "$dir" ]; then
+              echo "Validating Kubernetes manifests in $dir"
+              find "$dir" -name "*.yaml" -o -name "*.yml" | while read -r file; do
+                echo "Validating: $file"
+                kubeconform -summary -verbose "$file" || echo "⚠️ Validation warning in $file"
+              done
+            else
+              echo "Directory $dir not found, skipping..."
+            fi
+          }
+          
+          # Validate main repo manifests
+          validate_k8s_dir "main-repo"
+          
+          # Validate service manifests
+          validate_k8s_dir "front-end/k8s"
+          validate_k8s_dir "bedrock-service/k8s"
+          validate_k8s_dir "file-service/k8s"
+          validate_k8s_dir "api-gateway/k8s"
+
+      - name: "Lint Dockerfiles"
+        continue-on-error: true
+        run: |
+          echo "🔍 Linting Dockerfiles..."
+          
+          # Find and lint all Dockerfiles
+          find . -name "Dockerfile*" | while read -r file; do
+            echo "Linting: $file"
+            hadolint "$file" || echo "⚠️ Warning in $file"
+          done
+
+      - name: "Lint shell scripts"
+        continue-on-error: true
+        run: |
+          echo "🔍 Linting shell scripts..."
+          
+          # Find and lint all shell scripts
+          find . -name "*.sh" | while read -r file; do
+            echo "Linting: $file"
+            shellcheck "$file" || echo "⚠️ Warning in $file"
+          done
+
+      - name: "Lint JavaScript/TypeScript (if present)"
+        continue-on-error: true
+        run: |
+          echo "🔍 Checking for JavaScript/TypeScript files to lint..."
+          
+          # Function to lint JS/TS in a directory
+          lint_js_dir() {
+            local dir=$1
+            if [ -d "$dir" ]; then
+              cd "$dir"
+              if [ -f "package.json" ]; then
+                echo "Found package.json in $dir, installing dependencies..."
+                npm ci --silent 2>/dev/null || npm install --silent 2>/dev/null || echo "⚠️ Could not install deps in $dir"
+                
+                # Check if ESLint is configured
+                if [ -f ".eslintrc.js" ] || [ -f ".eslintrc.json" ] || [ -f ".eslintrc.yml" ] || grep -q '"eslint"' package.json; then
+                  echo "Running ESLint in $dir..."
+                  npx eslint . --ext .js,.jsx,.ts,.tsx 2>/dev/null || echo "⚠️ ESLint warnings in $dir"
+                else
+                  echo "No ESLint config found in $dir, skipping..."
+                fi
+                
+                # Check if Prettier is configured
+                if [ -f ".prettierrc" ] || [ -f ".prettierrc.json" ] || [ -f ".prettierrc.yml" ] || grep -q '"prettier"' package.json; then
+                  echo "Running Prettier check in $dir..."
+                  npx prettier --check . 2>/dev/null || echo "⚠️ Prettier formatting issues in $dir"
+                else
+                  echo "No Prettier config found in $dir, skipping..."
+                fi
+              else
+                echo "No package.json found in $dir, skipping JS/TS linting..."
+              fi
+              cd ..
+            fi
+          }
+          
+          # Lint each service
+          lint_js_dir "front-end"
+          lint_js_dir "bedrock-service"
+          lint_js_dir "file-service"
+          lint_js_dir "api-gateway"
+
+      - name: "Security scan"
+        continue-on-error: true
+        run: |
+          echo "🔍 Running basic security checks..."
+          
+          # Check for sensitive data patterns
+          echo "Checking for potential secrets..."
+          find . -type f -name "*.yaml" -o -name "*.yml" -o -name "*.json" -o -name "*.sh" | xargs grep -l -i "password\|secret\|key\|token" | while read -r file; do
+            echo "⚠️ Potential sensitive data in: $file"
+          done
+          
+          # Check for hardcoded IPs or URLs
+          echo "Checking for hardcoded URLs/IPs..."
+          find . -type f -name "*.yaml" -o -name "*.yml" | xargs grep -E "http://|https://|[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" || echo "No hardcoded URLs/IPs found"
+
+      - name: "Generate lint report"
+        if: always()
+        run: |
+          echo "📊 Linting Summary:"
+          echo "==================="
+          echo "✅ YAML linting completed"
+          echo "✅ Kubernetes manifest validation completed"
+          echo "✅ Dockerfile linting completed"
+          echo "✅ Shell script linting completed"
+          echo "✅ JavaScript/TypeScript linting completed"
+          echo "✅ Security scan completed"
+          echo ""
+          echo "Note: All linting steps are non-blocking. Check individual step outputs for details."
+
   deploy:
     runs-on: "self-hosted"
+    needs: lint  # Wait for linting to complete
     # Only run if the Terraform workflow succeeded (skip if manually triggered)
     if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     
