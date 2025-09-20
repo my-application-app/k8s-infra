@@ -1,143 +1,146 @@
-name: Deploy Bedrock Chat Multi-Repo
+---
+name: "Deploy Bedrock Chat Multi-Repo"
+
 on:
   workflow_run:
-    workflows: ["Setup Infra and Deploy GitHub Runner"]  # Replace with your exact Terraform workflow name
+    workflows: ["Setup Infra and Deploy GitHub Runner"]
     types:
-      - completed
-    branches: [ main, master ]
-  workflow_dispatch:  # Keep manual trigger option
+      - "completed"
+    branches: ["main", "master"]
+  workflow_dispatch: {}
+
 jobs:
   deploy:
-    runs-on: self-hosted
+    runs-on: "self-hosted"
     # Only run if the Terraform workflow succeeded (skip if manually triggered)
     if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     
     steps:
-    - name: Checkout main repo
-      uses: actions/checkout@v4
-      with:
-        path: main-repo
-    
-    - name: Run setup script
-      run: |
-        echo "Running setup.sh from main repo root..."
-        cd main-repo
-        if [ -f "setup.sh" ]; then
-          chmod +x setup.sh
-          ./setup.sh
-          echo "Setup script executed successfully"
-        else
-          echo "ERROR: setup.sh not found in main repo root"
-          exit 1
-        fi
-    
-    - name: Checkout front-end repo
-      uses: actions/checkout@v4
-      with:
-        repository: ${{ github.repository_owner }}/front-end
-        path: front-end
-        token: ${{ secrets.GITHUB_TOKEN }}
-    
-    - name: Checkout bedrock-service repo
-      uses: actions/checkout@v4
-      with:
-        repository: ${{ github.repository_owner }}/bedrock-service
-        path: bedrock-service
-        token: ${{ secrets.GITHUB_TOKEN }}
-    
-    - name: Checkout file-service repo
-      uses: actions/checkout@v4
-      with:
-        repository: ${{ github.repository_owner }}/file-service
-        path: file-service
-        token: ${{ secrets.GITHUB_TOKEN }}
-    
-    - name: Checkout api-gateway repo
-      uses: actions/checkout@v4
-      with:
-        repository: ${{ github.repository_owner }}/api-gateway
-        path: api-gateway
-        token: ${{ secrets.GITHUB_TOKEN }}
-    
-    - name: Deploy Main Repo
-      run: |
-        echo "Deploying main repo Kubernetes manifests..."
-        cd main-repo
-        kubectl apply -f namespace.yaml
-        kubectl apply -f secrets/
-        kubectl apply -f configmaps/
-        kubectl apply -f metrics-server-custom.yaml
-        kubectl apply -f statefulsets/
-        kubectl apply -f services/
-        kubectl apply -f monitoring/
-        kubectl apply -f network-policies/
-        kubectl apply -f hpa/
-        kubectl apply -f ingress/
-    
-    - name: Create AWS Secrets
-      run: |
-        echo "🔐 Creating AWS secrets..."
-        
-        # Create AWS secrets using organization secrets
-        cat <<EOF | kubectl apply -f -
-        apiVersion: v1
-        kind: Secret
-        metadata:
-          name: app-secrets
-          namespace: bedrock-chat-v2
-        type: Opaque
-        stringData:
-          AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
-          AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_SECRET_ACCESS_KEY }}"
-          AWS_REGION: "us-east-1"
-        EOF
-        
-        echo "✅ AWS secrets created"
-    
-    - name: Deploy Front-End Service
-      run: |
-        echo "Deploying front-end Kubernetes manifests..."
-        if [ -d "front-end/k8s" ]; then
-          kubectl apply -f front-end/k8s/ --recursive
-        else
-          echo "No k8s folder found in front-end repo"
-        fi
-    
-    - name: Deploy Bedrock Service
-      run: |
-        echo "Deploying bedrock-service Kubernetes manifests..."
-        if [ -d "bedrock-service/k8s" ]; then
-          kubectl apply -f bedrock-service/k8s/ --recursive
-        else
-          echo "No k8s folder found in bedrock-service repo"
-        fi
-    
-    - name: Deploy File Service
-      run: |
-        echo "Deploying file-service Kubernetes manifests..."
-        if [ -d "file-service/k8s" ]; then
-          kubectl apply -f file-service/k8s/ --recursive
-        else
-          echo "No k8s folder found in file-service repo"
-        fi
-    
-    - name: Deploy API Gateway
-      run: |
-        echo "Deploying api-gateway Kubernetes manifests..."
-        if [ -d "api-gateway/k8s" ]; then
-          kubectl apply -f api-gateway/k8s/ --recursive
-        else
-          echo "No k8s folder found in api-gateway repo"
-        fi
-    
-    - name: Final Status Check
-      run: |
-        echo "Deployment completed for all services!"
-        echo "Current status:"
-        kubectl get all -n bedrock-chat-v2
-        
-        echo "Checking pods status:"
-        kubectl get pods -n bedrock-chat-v2 -o wide
-        
-        echo "Checking services:"
-        kubectl get services -n bedrock-chat-v2
+      - name: "Checkout main repo"
+        uses: "actions/checkout@v4"
+        with:
+          path: "main-repo"
+      
+      - name: "Run setup script"
+        run: |
+          echo "Running setup.sh from main repo root..."
+          cd main-repo
+          if [ -f "setup.sh" ]; then
+            chmod +x setup.sh
+            ./setup.sh
+            echo "Setup script executed successfully"
+          else
+            echo "ERROR: setup.sh not found in main repo root"
+            exit 1
+          fi
+
+      - name: "Checkout front-end repo"
+        uses: "actions/checkout@v4"
+        with:
+          repository: "${{ github.repository_owner }}/front-end"
+          path: "front-end"
+          token: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: "Checkout bedrock-service repo"
+        uses: "actions/checkout@v4"
+        with:
+          repository: "${{ github.repository_owner }}/bedrock-service"
+          path: "bedrock-service"
+          token: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: "Checkout file-service repo"
+        uses: "actions/checkout@v4"
+        with:
+          repository: "${{ github.repository_owner }}/file-service"
+          path: "file-service"
+          token: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: "Checkout api-gateway repo"
+        uses: "actions/checkout@v4"
+        with:
+          repository: "${{ github.repository_owner }}/api-gateway"
+          path: "api-gateway"
+          token: "${{ secrets.GITHUB_TOKEN }}"
+      
+      - name: "Deploy Main Repo"
+        run: |
+          echo "Deploying main repo Kubernetes manifests..."
+          cd main-repo
+          kubectl apply -f namespace.yaml
+          kubectl apply -f secrets/
+          kubectl apply -f configmaps/
+          kubectl apply -f metrics-server-custom.yaml
+          kubectl apply -f statefulsets/
+          kubectl apply -f services/
+          kubectl apply -f monitoring/
+          kubectl apply -f network-policies/
+          kubectl apply -f hpa/
+          kubectl apply -f ingress/
+
+      - name: "Create AWS Secrets"
+        run: |
+          echo "🔐 Creating AWS secrets..."
+          
+          # Create AWS secrets using organization secrets
+          cat <<EOF | kubectl apply -f -
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: app-secrets
+            namespace: bedrock-chat-v2
+          type: Opaque
+          stringData:
+            AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
+            AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+            AWS_REGION: "us-east-1"
+          EOF
+          
+          echo "✅ AWS secrets created"
+      
+      - name: "Deploy Front-End Service"
+        run: |
+          echo "Deploying front-end Kubernetes manifests..."
+          if [ -d "front-end/k8s" ]; then
+            kubectl apply -f front-end/k8s/ --recursive
+          else
+            echo "No k8s folder found in front-end repo"
+          fi
+
+      - name: "Deploy Bedrock Service"
+        run: |
+          echo "Deploying bedrock-service Kubernetes manifests..."
+          if [ -d "bedrock-service/k8s" ]; then
+            kubectl apply -f bedrock-service/k8s/ --recursive
+          else
+            echo "No k8s folder found in bedrock-service repo"
+          fi
+
+      - name: "Deploy File Service"
+        run: |
+          echo "Deploying file-service Kubernetes manifests..."
+          if [ -d "file-service/k8s" ]; then
+            kubectl apply -f file-service/k8s/ --recursive
+          else
+            echo "No k8s folder found in file-service repo"
+          fi
+
+      - name: "Deploy API Gateway"
+        run: |
+          echo "Deploying api-gateway Kubernetes manifests..."
+          if [ -d "api-gateway/k8s" ]; then
+            kubectl apply -f api-gateway/k8s/ --recursive
+          else
+            echo "No k8s folder found in api-gateway repo"
+          fi
+
+      - name: "Final Status Check"
+        run: |
+          echo "Deployment completed for all services!"
+          echo "Current status:"
+          kubectl get all -n bedrock-chat-v2
+          
+          echo "Checking pods status:"
+          kubectl get pods -n bedrock-chat-v2 -o wide
+          
+          echo "Checking services:"
+          kubectl get services -n bedrock-chat-v2
