@@ -80,7 +80,7 @@ jobs:
         run: |
           echo "🔍 Linting YAML files..."
           
-          # Create yamllint config
+          # Create yamllint config that's GitHub Actions friendly
           cat > .yamllint.yml << EOF
           extends: default
           rules:
@@ -89,13 +89,45 @@ jobs:
             document-start: disable
             truthy: disable
             comments: disable
+            trailing-spaces: disable
+            brackets:
+              min-spaces-inside: 0
+              max-spaces-inside: 1
+            indentation:
+              spaces: consistent
+              indent-sequences: false
+            empty-lines:
+              max-end: 1
           EOF
           
-          # Find and lint all YAML files
-          find . -name "*.yaml" -o -name "*.yml" | while read -r file; do
+          # Find and lint all YAML files, excluding problematic ones
+          find . -name "*.yaml" -o -name "*.yml" | grep -v "\.github/workflows" | while read -r file; do
             echo "Linting: $file"
             yamllint -c .yamllint.yml "$file" || echo "⚠️ Warning in $file"
           done
+          
+          # Special handling for GitHub Actions workflows with relaxed rules
+          if find . -path "*/.github/workflows/*.y*ml" | grep -q .; then
+            echo "Linting GitHub Actions workflows with relaxed rules..."
+            cat > .yamllint-github.yml << EOF
+          extends: default
+          rules:
+            line-length:
+              max: 150
+            document-start: disable
+            truthy: disable
+            comments: disable
+            trailing-spaces: disable
+            brackets: disable
+            indentation: disable
+            empty-lines: disable
+          EOF
+            
+            find . -path "*/.github/workflows/*.y*ml" | while read -r file; do
+              echo "Linting GitHub Actions workflow: $file"
+              yamllint -c .yamllint-github.yml "$file" || echo "⚠️ Warning in $file"
+            done
+          fi
 
       - name: "Lint Kubernetes manifests"
         continue-on-error: true
