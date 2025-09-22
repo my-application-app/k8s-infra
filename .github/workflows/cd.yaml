@@ -59,24 +59,58 @@ jobs:
         path: api-gateway
         token: ${{ secrets.GITHUB_TOKEN }}
     
-    - name: Wait for Ingress Controller Ready
+    - name: Setup and Verify Ingress Controller
       run: |
-        echo "Ensuring NGINX ingress controller is ready..."
-        kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=300s || echo "Ingress controller wait timeout, continuing..."
+        echo "Setting up NGINX Ingress Controller..."
         
-        echo "Waiting for ingress admission webhook..."
-        for i in {1..20}; do
+        # Check if ingress-nginx namespace exists, if not create it
+        if ! kubectl get namespace ingress-nginx >/dev/null 2>&1; then
+          echo "Creating ingress-nginx namespace..."
+          kubectl create namespace ingress-nginx
+        fi
+        
+        # Apply NGINX Ingress Controller (idempotent operation)
+        echo "Applying NGINX Ingress Controller manifests..."
+        kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/cloud/deploy.yaml
+        
+        # Wait for ingress controller deployment to be available
+        echo "Waiting for ingress controller deployment..."
+        kubectl wait --namespace ingress-nginx \
+          --for=condition=available \
+          deployment/ingress-nginx-controller \
+          --timeout=300s
+        
+        echo "Verifying ingress controller pods..."
+        kubectl get pods -n ingress-nginx
+        
+        # Wait for all ingress controller pods to be ready
+        echo "Waiting for ingress controller pods to be ready..."
+        kubectl wait --namespace ingress-nginx \
+          --for=condition=ready pod \
+          --selector=app.kubernetes.io/component=controller \
+          --timeout=300s
+        
+        # Check if admission webhook is ready
+        echo "Checking admission webhook readiness..."
+        for i in {1..30}; do
           if kubectl get validatingwebhookconfiguration ingress-nginx-admission >/dev/null 2>&1; then
             echo "Admission webhook is ready"
             break
           fi
-          echo "Attempt $i/20: Waiting for admission webhook... (10s)"
+          echo "Attempt $i/30: Waiting for admission webhook... (10s)"
           sleep 10
+          if [ $i -eq 30 ]; then
+            echo "WARNING: Admission webhook not ready after 5 minutes, continuing anyway..."
+          fi
         done
         
-        echo "Ingress controller readiness check completed"
-    
-    - name: Deploy Main Repo
+        # Verify service is running
+        echo "Verifying ingress controller service..."
+        kubectl get service ingress-nginx-controller -n ingress-nginx
+        
+        echo "Ingress controller setup completed successfully"
+
+    - name: Deploy Main Repo Infrastructure
       run: |
         echo "Deploying main repo Kubernetes manifests..."
         cd main-repo
@@ -90,17 +124,7 @@ jobs:
         kubectl apply -f network-policies/
         kubectl apply -f hpa/
         
-        echo "Deploying ingress with retry logic..."
-        for attempt in {1..3}; do
-          echo "Ingress deployment attempt $attempt/3"
-          if kubectl apply -f ingress/; then
-            echo "Ingress deployed successfully"
-            break
-          else
-            echo "Ingress deployment failed, waiting 30s before retry..."
-            sleep 30
-          fi
-        done
+        echo "Main infrastructure deployed successfully"
     
     - name: Create AWS Secrets
       run: |
@@ -154,6 +178,48 @@ jobs:
         else
           echo "No k8s folder found in api-gateway repo"
         fi
+    
+    - name: Deploy Ingress Rules
+      run: |
+        echo "Deploying ingress rules with enhanced retry logic..."
+        cd main-repo
+        
+        # Wait additional time for ingress controller to be fully stable
+        echo "Additional stabilization wait for ingress controller..."
+        sleep 30
+        
+        # Deploy ingress with comprehensive retry logic
+        for attempt in {1..5}; do
+          echo "Ingress deployment attempt $attempt/5"
+          
+          if kubectl apply -f ingress/; then
+            echo "Ingress rules applied successfully"
+            
+            # Verify ingress was created properly
+            echo "Verifying ingress resources..."
+            kubectl get ingress -n bedrock-chat-v2
+            
+            # Check ingress status
+            if kubectl get ingress bedrock-chat-ingress -n bedrock-chat-v2 >/dev/null 2>&1; then
+              echo "Ingress created successfully"
+              break
+            else
+              echo "Ingress not found after creation, retrying..."
+            fi
+          else
+            echo "Ingress deployment failed on attempt $attempt"
+          fi
+          
+          if [ $attempt -lt 5 ]; then
+            echo "Waiting 45s before retry..."
+            sleep 45
+          else
+            echo "ERROR: Failed to deploy ingress after 5 attempts"
+            exit 1
+          fi
+        done
+        
+        echo "Ingress deployment completed"
     
     - name: Wait for Application Components
       run: |
@@ -388,6 +454,10 @@ jobs:
         
         echo "Checking services:"
         kubectl get services -n bedrock-chat-v2
+        
+        echo "Checking ingress:"
+        kubectl get ingress -n bedrock-chat-v2
+        kubectl describe ingress bedrock-chat-ingress -n bedrock-chat-v2 || echo "Ingress not found"
         
         echo "DAST Security Scan Summary:"
         echo "================================"
